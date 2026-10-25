@@ -16,23 +16,33 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="海外債知識群島", page_icon="🏝️", layout="wide",
                    initial_sidebar_state="collapsed")
 
+# 遊戲檔放在私人 repo 最上層或 games 資料夾都可以，會依序找
 GAMES = {
-    "coupon": "games/coupon.html",
-    "stopwatch": "games/stopwatch.html",
-    "forest": "games/forest.html",
+    "coupon": ["coupon.html", "games/coupon.html"],
+    "stopwatch": ["stopwatch.html", "games/stopwatch.html"],
+    "forest": ["forest.html", "games/forest.html"],
 }
 
 # ---------- 讀 Secrets ----------
+NEED = ["PORTAL_PASSWORD", "SUPABASE_URL", "SUPABASE_ANON_KEY", "GH_TOKEN"]
 try:
-    PASSWORD = st.secrets["PORTAL_PASSWORD"]
-    SB_URL = st.secrets["SUPABASE_URL"]
-    SB_KEY = st.secrets["SUPABASE_ANON_KEY"]
-    GH_TOKEN = st.secrets["GH_TOKEN"]
-    CONTENT_REPO = st.secrets.get("CONTENT_REPO", "albert7755-ux/bond-islands")
-    CONTENT_BRANCH = st.secrets.get("CONTENT_BRANCH", "main")
+    have = list(st.secrets.keys())
 except Exception:
-    st.error("Secrets 還沒設定完整：需要 PORTAL_PASSWORD、SUPABASE_URL、SUPABASE_ANON_KEY、GH_TOKEN。")
+    st.error("Secrets 的格式有錯，系統看不懂。最常見的原因是引號被換成彎引號（“ ”），"
+             "請改成直的雙引號（\"），每一行都是 名稱 = \"值\" 的格式。")
     st.stop()
+missing = [k for k in NEED if not str(st.secrets.get(k, "")).strip()]
+if missing:
+    st.error("Secrets 少了這幾行：" + "、".join(missing))
+    st.caption("目前讀到的名稱：" + ("、".join(have) if have else "（一行都沒有，可能還沒按 Save）")
+               + "。名稱要全部大寫、用底線，不能有空格或全形字。改完按 Save，等一分鐘再重新整理。")
+    st.stop()
+PASSWORD = str(st.secrets["PORTAL_PASSWORD"])
+SB_URL = str(st.secrets["SUPABASE_URL"]).strip()
+SB_KEY = str(st.secrets["SUPABASE_ANON_KEY"]).strip()
+GH_TOKEN = str(st.secrets["GH_TOKEN"]).strip()
+CONTENT_REPO = str(st.secrets.get("CONTENT_REPO", "albert7755-ux/bond-islands")).strip()
+CONTENT_BRANCH = str(st.secrets.get("CONTENT_BRANCH", "main")).strip()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -114,10 +124,17 @@ APP_URL = st.secrets.get("APP_URL", f"https://{host}/" if host else "")
 # ---------- 遊樂園島的三款遊戲 ----------
 game = qp.get("game")
 if game in GAMES:
-    try:
-        html = load_content(GAMES[game])
-    except Exception as e:
-        show_load_error(GAMES[game], e)
+    html, last_err = None, None
+    for path in GAMES[game]:
+        try:
+            html = load_content(path)
+            break
+        except Exception as e:
+            last_err = e
+            if str(e) != "404":
+                break
+    if html is None:
+        show_load_error(GAMES[game][0], last_err)
         st.stop()
     st.markdown(FULL, unsafe_allow_html=True)
     components.html(html, height=860, scrolling=True)
