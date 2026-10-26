@@ -5,7 +5,9 @@
 - 先輸入授權碼（和投資機長箱同一組，Secrets 的 PORTAL_PASSWORD）
 - 通過後載入 island.html，並把 Supabase 設定注入網頁
 - ?game=coupon / stopwatch / forest 會開啟遊樂園島上的三款遊戲
+- 私人 repo 的 posters 資料夾放成交故事島的戰報海報（檔名＝案例代號）
 """
+import base64
 import hashlib
 import json
 
@@ -58,6 +60,31 @@ def load_content(path: str) -> str:
         raise RuntimeError(f"{r.status_code}")
     r.encoding = "utf-8"
     return r.text
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_posters() -> dict:
+    """讀私人 repo 的 posters 資料夾（成交故事島的戰報海報）。
+    檔名就是案例代號，例如 posters/case-hl.webp。資料夾不存在就回傳空的。"""
+    base = f"https://api.github.com/repos/{CONTENT_REPO}/contents/posters?ref={CONTENT_BRANCH}"
+    head = {"Authorization": f"Bearer {GH_TOKEN}", "X-GitHub-Api-Version": "2022-11-28"}
+    try:
+        r = requests.get(base, timeout=20, headers={**head, "Accept": "application/vnd.github+json"})
+        if r.status_code != 200:
+            return {}
+        out = {}
+        mime = {"webp": "image/webp", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
+        for f in r.json():
+            name = f.get("name", "")
+            stem, _, ext = name.rpartition(".")
+            if f.get("type") != "file" or ext.lower() not in mime or f.get("size", 0) > 900_000:
+                continue
+            b = requests.get(f["url"], timeout=20, headers={**head, "Accept": "application/vnd.github.raw"})
+            if b.status_code == 200:
+                out[stem] = f"data:{mime[ext.lower()]};base64," + base64.b64encode(b.content).decode()
+        return out
+    except Exception:
+        return {}
 
 
 def show_load_error(path: str, err: Exception) -> None:
@@ -153,5 +180,7 @@ if not html.lstrip().lower().startswith("<!doctype"):
             '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             '<style>body{margin:0;font:14px system-ui,sans-serif}</style></head><body>' + html + '</body></html>')
 cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN}
-html = html.replace("/*__ISLAND_CONFIG__*/", "window.ISLAND_CFG=" + json.dumps(cfg) + ";", 1)
+posters = load_posters()
+html = html.replace("/*__ISLAND_CONFIG__*/",
+                    "window.ISLAND_CFG=" + json.dumps(cfg) + ";window.ISLAND_POSTERS=" + json.dumps(posters) + ";", 1)
 components.html(html, height=860, scrolling=False)
