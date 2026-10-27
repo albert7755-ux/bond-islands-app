@@ -6,10 +6,16 @@
 - 通過後載入 island.html，並把 Supabase 設定注入網頁
 - ?game=coupon / stopwatch / forest 會開啟遊樂園島上的三款遊戲
 - 私人 repo 的 posters 資料夾放成交故事島的戰報海報（檔名＝案例代號）
+- ?admin=1 是固收科上傳頁（要 ADMIN_PASSWORD 和可寫入的 GH_WRITE_TOKEN）：
+  上傳「債市每日聚焦」（只留近 60 天）和「發行機構簡介」，存到私人 repo 的 focus／issuers 資料夾
+- ?view=focus&d=日期、?view=issuer&id=代號 是放大看的頁面
 """
 import base64
+import datetime as dt
 import hashlib
+import io
 import json
+from zoneinfo import ZoneInfo
 
 import requests
 import streamlit as st
@@ -87,6 +93,46 @@ def load_posters() -> dict:
         return {}
 
 
+# ---------- 上傳資料（債市每日聚焦、發行機構簡介） ----------
+ISSUERS = [("gs", "高盛集團"), ("socgen", "法國興業銀行"), ("wfc", "富國銀行"), ("db", "德意志銀行"),
+           ("brk", "波克夏海瑟威"), ("axp", "美國運通"), ("aapl", "蘋果"), ("meta", "Meta"), ("googl", "Google"),
+           ("amzn", "亞馬遜"), ("nvda", "輝達"), ("dis", "迪士尼"), ("sony", "Sony"), ("unh", "聯合健康集團"),
+           ("gild", "吉利德科學")]
+ISSUER_NAME = dict(ISSUERS)
+KEEP_DAYS = 60
+TZ = ZoneInfo("Asia/Taipei")
+
+
+def gh_raw(path: str):
+    """讀私人 repo 的檔案（bytes）；沒有就回傳 None。"""
+    url = f"https://api.github.com/repos/{CONTENT_REPO}/contents/{path}?ref={CONTENT_BRANCH}"
+    r = requests.get(url, timeout=20, headers={"Authorization": f"Bearer {GH_TOKEN}",
+                                               "Accept": "application/vnd.github.raw",
+                                               "X-GitHub-Api-Version": "2022-11-28"})
+    return r.content if r.status_code == 200 else None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_index(kind: str):
+    """focus/index.json 是清單（新的在前）；issuers/index.json 是 {代號: {...}}。"""
+    b = gh_raw(f"{kind}/index.json")
+    try:
+        return json.loads(b.decode("utf-8")) if b else ([] if kind == "focus" else {})
+    except Exception:
+        return [] if kind == "focus" else {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_image(path: str) -> str:
+    b = gh_raw(path)
+    return ("data:image/webp;base64," + base64.b64encode(b).decode()) if b else ""
+
+
+def recent_focus():
+    cut = (dt.datetime.now(TZ).date() - dt.timedelta(days=KEEP_DAYS)).isoformat()
+    return [x for x in load_index("focus") if x.get("d", "") >= cut]
+
+
 def show_load_error(path: str, err: Exception) -> None:
     code = str(err)
     why = {
@@ -148,6 +194,189 @@ except Exception:
     pass
 APP_URL = st.secrets.get("APP_URL", f"https://{host}/" if host else "")
 
+# ---------- 放大看：債市每日聚焦／發行機構簡介 ----------
+view = qp.get("view")
+if view in ("focus", "issuer"):
+    st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
+                unsafe_allow_html=True)
+    if view == "focus":
+        d = qp.get("d", "")
+        item = next((x for x in load_index("focus") if x.get("d") == d), None)
+        title = f"債市每日聚焦｜{d}" + (f"｜{item.get('title')}" if item and item.get("title") else "")
+    else:
+        iid = qp.get("id", "")
+        item = load_index("issuers").get(iid)
+        title = f"{ISSUER_NAME.get(iid, iid)}｜發行機構簡介"
+    st.subheader(title)
+    if not item:
+        st.info("找不到這份資料，可能已經超過保留期間或被刪除了。")
+        st.stop()
+    if item.get("text"):
+        st.write(item["text"])
+    for path in item.get("pages", []):
+        src = load_image(path)
+        if src:
+            st.image(src, use_container_width=True)
+    st.caption("僅供內部教育訓練使用，請勿外流。")
+    st.stop()
+
+# ---------- 固收科上傳頁（?admin=1） ----------
+if qp.get("admin") == "1":
+    ADMIN_PW = str(st.secrets.get("ADMIN_PASSWORD", "")).strip()
+    WRITE_TOKEN = str(st.secrets.get("GH_WRITE_TOKEN", "")).strip()
+    st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
+                unsafe_allow_html=True)
+    st.title("🏝️ 群島上傳頁")
+    if not ADMIN_PW or not WRITE_TOKEN:
+        st.error("Secrets 還少了 " + "、".join([n for n, v in (("ADMIN_PASSWORD", ADMIN_PW), ("GH_WRITE_TOKEN", WRITE_TOKEN)) if not v])
+                 + "。ADMIN_PASSWORD 是這個上傳頁的密碼；GH_WRITE_TOKEN 是可以寫入 bond-islands 的 GitHub 通行碼。")
+        st.stop()
+    if not st.session_state.get("admin_ok"):
+        with st.form("adm", border=False):
+            apw = st.text_input("上傳頁密碼", type="password")
+            if st.form_submit_button("進入", type="primary"):
+                if apw == ADMIN_PW:
+                    st.session_state.admin_ok = True
+                    st.rerun()
+                st.error("密碼不對。")
+        st.stop()
+
+    WH = {"Authorization": f"Bearer {WRITE_TOKEN}", "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28"}
+
+    def gh_sha(path):
+        r = requests.get(f"https://api.github.com/repos/{CONTENT_REPO}/contents/{path}?ref={CONTENT_BRANCH}",
+                         headers=WH, timeout=20)
+        return r.json().get("sha") if r.status_code == 200 else None
+
+    def gh_put(path, data: bytes, msg):
+        body = {"message": msg, "content": base64.b64encode(data).decode(), "branch": CONTENT_BRANCH}
+        sha = gh_sha(path)
+        if sha:
+            body["sha"] = sha
+        r = requests.put(f"https://api.github.com/repos/{CONTENT_REPO}/contents/{path}", headers=WH,
+                         json=body, timeout=60)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"寫入 {path} 失敗（{r.status_code}）：{r.text[:200]}")
+
+    def gh_del(path, msg):
+        sha = gh_sha(path)
+        if sha:
+            requests.delete(f"https://api.github.com/repos/{CONTENT_REPO}/contents/{path}", headers=WH,
+                            json={"message": msg, "sha": sha, "branch": CONTENT_BRANCH}, timeout=30)
+
+    def to_pages(files):
+        """PDF 每頁轉成圖片；圖片直接壓縮。全部轉成 webp。"""
+        from PIL import Image
+        import pymupdf
+        imgs = []
+        for f in files:
+            data = f.getvalue()
+            if f.name.lower().endswith(".pdf"):
+                doc = pymupdf.open(stream=data, filetype="pdf")
+                for page in list(doc)[:10]:
+                    pix = page.get_pixmap(dpi=120)
+                    imgs.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+            else:
+                imgs.append(Image.open(io.BytesIO(data)).convert("RGB"))
+        out = []
+        for im in imgs:
+            if im.width > 1100:
+                im = im.resize((1100, round(im.height * 1100 / im.width)))
+            buf = io.BytesIO()
+            im.save(buf, "WEBP", quality=72)
+            out.append(buf.getvalue())
+        return out
+
+    def save_json(path, obj, msg):
+        gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
+
+    tab1, tab2 = st.tabs(["📰 債市每日聚焦", "🏢 發行機構簡介"])
+    with tab1:
+        st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。同一天再傳一次會覆蓋。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。")
+        with st.form("focus", clear_on_submit=True):
+            day = st.date_input("日期", value=dt.datetime.now(TZ).date())
+            ttl = st.text_input("標題（可不填）")
+            txt = st.text_area("文字重點（可不填）", height=120)
+            ups = st.file_uploader("檔案", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+            go = st.form_submit_button("上傳", type="primary")
+        if go:
+            if not ups and not txt.strip():
+                st.warning("檔案和文字至少要有一個。")
+            else:
+                with st.spinner("上傳中…"):
+                    d = day.isoformat()
+                    idx = load_index("focus")
+                    load_index.clear()
+                    idx = [x for x in load_index("focus")]
+                    old = next((x for x in idx if x.get("d") == d), None)
+                    for pth in (old or {}).get("pages", []):
+                        gh_del(pth, f"每日聚焦 {d}：覆蓋舊檔")
+                    pages = []
+                    for n, b in enumerate(to_pages(ups or []), 1):
+                        pth = f"focus/{d}/p{n}.webp"
+                        gh_put(pth, b, f"每日聚焦 {d} 第 {n} 頁")
+                        pages.append(pth)
+                    idx = [x for x in idx if x.get("d") != d] + [{"d": d, "title": ttl.strip(), "text": txt.strip(), "pages": pages}]
+                    cut = (dt.datetime.now(TZ).date() - dt.timedelta(days=KEEP_DAYS)).isoformat()
+                    for x in [x for x in idx if x.get("d", "") < cut]:
+                        for pth in x.get("pages", []):
+                            gh_del(pth, f"每日聚焦 {x['d']} 超過 {KEEP_DAYS} 天，自動刪除")
+                    idx = sorted([x for x in idx if x.get("d", "") >= cut], key=lambda x: x["d"], reverse=True)
+                    save_json("focus/index.json", idx, f"每日聚焦清單更新（{d}）")
+                    load_index.clear()
+                st.success(f"{d} 上傳完成，約 5 分鐘內島上就會更新。")
+        st.divider()
+        st.markdown("**目前島上的每日聚焦**")
+        for x in load_index("focus"):
+            c1, c2 = st.columns([5, 1])
+            c1.write(f"{x['d']}　{x.get('title', '')}　（{len(x.get('pages', []))} 頁）")
+            if c2.button("刪除", key="delf" + x["d"]):
+                for pth in x.get("pages", []):
+                    gh_del(pth, f"刪除每日聚焦 {x['d']}")
+                save_json("focus/index.json", [y for y in load_index("focus") if y["d"] != x["d"]], f"刪除每日聚焦 {x['d']}")
+                load_index.clear()
+                st.rerun()
+    with tab2:
+        st.caption("選一家發行機構，傳 PDF 或圖片，或打一段文字簡介。再傳一次會覆蓋舊的。")
+        with st.form("issuer", clear_on_submit=True):
+            iid = st.selectbox("發行機構", [i for i, _ in ISSUERS], format_func=lambda i: ISSUER_NAME[i])
+            txt2 = st.text_area("文字簡介（可不填）", height=120)
+            ups2 = st.file_uploader("檔案", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="iu")
+            go2 = st.form_submit_button("上傳", type="primary")
+        if go2:
+            if not ups2 and not txt2.strip():
+                st.warning("檔案和文字至少要有一個。")
+            else:
+                with st.spinner("上傳中…"):
+                    load_index.clear()
+                    idx = dict(load_index("issuers"))
+                    for pth in idx.get(iid, {}).get("pages", []):
+                        gh_del(pth, f"{ISSUER_NAME[iid]} 簡介：覆蓋舊檔")
+                    pages = []
+                    for n, b in enumerate(to_pages(ups2 or []), 1):
+                        pth = f"issuers/{iid}/p{n}.webp"
+                        gh_put(pth, b, f"{ISSUER_NAME[iid]} 簡介第 {n} 頁")
+                        pages.append(pth)
+                    idx[iid] = {"text": txt2.strip(), "pages": pages, "updated": dt.datetime.now(TZ).date().isoformat()}
+                    save_json("issuers/index.json", idx, f"{ISSUER_NAME[iid]} 簡介更新")
+                    load_index.clear()
+                st.success(f"{ISSUER_NAME[iid]} 簡介上傳完成，約 5 分鐘內島上就會更新。")
+        st.divider()
+        st.markdown("**已有簡介的發行機構**")
+        idx = load_index("issuers")
+        for i, n in ISSUERS:
+            if i in idx:
+                c1, c2 = st.columns([5, 1])
+                c1.write(f"{n}　（{len(idx[i].get('pages', []))} 頁，{idx[i].get('updated', '')} 更新）")
+                if c2.button("刪除", key="deli" + i):
+                    for pth in idx[i].get("pages", []):
+                        gh_del(pth, f"刪除 {n} 簡介")
+                    save_json("issuers/index.json", {k: v for k, v in idx.items() if k != i}, f"刪除 {n} 簡介")
+                    load_index.clear()
+                    st.rerun()
+    st.stop()
+
 # ---------- 遊樂園島的三款遊戲 ----------
 game = qp.get("game")
 if game in GAMES:
@@ -181,6 +410,19 @@ if not html.lstrip().lower().startswith("<!doctype"):
             '<style>body{margin:0;font:14px system-ui,sans-serif}</style></head><body>' + html + '</body></html>')
 cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN}
 posters = load_posters()
+days = recent_focus()
+focus = {"days": [{"d": x["d"], "title": x.get("title", "")} for x in days], "latest": None}
+if days:
+    L = days[0]
+    focus["latest"] = {"d": L["d"], "title": L.get("title", ""), "text": L.get("text", ""),
+                       "imgs": [u for u in (load_image(p) for p in L.get("pages", [])[:4]) if u]}
+issuers = {k: {"text": v.get("text", ""), "pages": v.get("pages", [])} for k, v in load_index("issuers").items()}
+def js(o):
+    return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
+
+
 html = html.replace("/*__ISLAND_CONFIG__*/",
-                    "window.ISLAND_CFG=" + json.dumps(cfg) + ";window.ISLAND_POSTERS=" + json.dumps(posters) + ";", 1)
+                    "window.ISLAND_CFG=" + json.dumps(cfg) + ";window.ISLAND_POSTERS=" + json.dumps(posters)
+                    + ";window.ISLAND_FOCUS=" + js(focus)
+                    + ";window.ISLAND_ISSUERS=" + js(issuers) + ";", 1)
 components.html(html, height=860, scrolling=False)
