@@ -128,6 +128,31 @@ def load_image(path: str) -> str:
     return ("data:image/webp;base64," + base64.b64encode(b).decode()) if b else ""
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_json(path: str, default):
+    b = gh_raw(path)
+    try:
+        return json.loads(b.decode("utf-8")) if b else default
+    except Exception:
+        return default
+
+
+def top10_payload():
+    """熱銷前十大：top10.json 是你在上傳頁填的代碼；quotes/latest.json 是龍蝦上傳報價檔時同步過來的全部報價。"""
+    cfg = load_json("top10.json", {})
+    items = cfg.get("items") or []
+    if not items:
+        return None
+    q = load_json("quotes/latest.json", {})
+    by = {str(b.get("code", "")).strip().upper(): b for b in q.get("bonds", [])}
+    out = []
+    for it in items:
+        code = str(it.get("code", "")).strip().upper()
+        if code:
+            out.append({"code": code, "ltv": it.get("ltv", ""), "q": by.get(code)})
+    return {"date": q.get("date", ""), "title": cfg.get("title", "熱銷前十大"), "items": out}
+
+
 def recent_focus():
     cut = (dt.datetime.now(TZ).date() - dt.timedelta(days=KEEP_DAYS)).isoformat()
     return [x for x in load_index("focus") if x.get("d", "") >= cut]
@@ -291,7 +316,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab2 = st.tabs(["📰 債市每日聚焦", "🏢 發行機構簡介"])
+    tab1, tab2, tab3 = st.tabs(["📰 債市每日聚焦", "🏢 發行機構簡介", "🔥 熱銷前十大"])
     with tab1:
         st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。同一天再傳一次會覆蓋。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。")
         with st.form("focus", clear_on_submit=True):
@@ -375,6 +400,33 @@ if qp.get("admin") == "1":
                     save_json("issuers/index.json", {k: v for k, v in idx.items() if k != i}, f"刪除 {n} 簡介")
                     load_index.clear()
                     st.rerun()
+    with tab3:
+        st.caption("依排名填產品代碼（WMBB 開頭），價格、YTM、評等等等會自動從每天上傳的報價檔帶入。"
+                   "LTV 報價檔沒有，要自己填（例如 0.75），不填就顯示「－」。")
+        load_json.clear()
+        cur = load_json("top10.json", {})
+        cur_items = (cur.get("items") or []) + [{}] * 10
+        q = load_json("quotes/latest.json", {})
+        by = {str(b.get("code", "")).strip().upper(): b for b in q.get("bonds", [])}
+        st.info(f"目前報價日期：{q.get('date') or '還沒有同步過'}（共 {len(by)} 檔）")
+        with st.form("top10"):
+            ttl3 = st.text_input("標題", value=cur.get("title", "熱銷前十大"))
+            rows = []
+            for k in range(10):
+                c1, c2, c3 = st.columns([3, 1, 4])
+                code = c1.text_input(f"第 {k + 1} 名代碼", value=cur_items[k].get("code", ""), key=f"tc{k}")
+                ltv = c2.text_input("LTV", value=str(cur_items[k].get("ltv", "")), key=f"tl{k}")
+                hit = by.get(code.strip().upper()) if code.strip() else None
+                c3.markdown(f"<div style='padding-top:30px;font-size:13px'>{'✅ ' + hit['name'] if hit else ('⚠️ 報價檔找不到' if code.strip() else '')}</div>",
+                            unsafe_allow_html=True)
+                rows.append((code.strip().upper(), ltv.strip()))
+            go3 = st.form_submit_button("儲存", type="primary")
+        if go3:
+            items = [{"code": c, "ltv": l} for c, l in rows if c]
+            save_json("top10.json", {"title": ttl3.strip() or "熱銷前十大", "items": items},
+                      f"熱銷前十大更新（{len(items)} 檔）")
+            load_json.clear()
+            st.success(f"已儲存 {len(items)} 檔，約 5 分鐘內島上就會更新。")
     st.stop()
 
 # ---------- 遊樂園島的三款遊戲 ----------
@@ -416,6 +468,7 @@ if days:
     L = days[0]
     focus["latest"] = {"d": L["d"], "title": L.get("title", ""), "text": L.get("text", ""),
                        "imgs": [u for u in (load_image(p) for p in L.get("pages", [])[:4]) if u]}
+top10 = top10_payload()
 issuers = {k: {"text": v.get("text", ""), "pages": v.get("pages", [])} for k, v in load_index("issuers").items()}
 def js(o):
     return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
@@ -424,5 +477,6 @@ def js(o):
 html = html.replace("/*__ISLAND_CONFIG__*/",
                     "window.ISLAND_CFG=" + json.dumps(cfg) + ";window.ISLAND_POSTERS=" + json.dumps(posters)
                     + ";window.ISLAND_FOCUS=" + js(focus)
-                    + ";window.ISLAND_ISSUERS=" + js(issuers) + ";", 1)
+                    + ";window.ISLAND_ISSUERS=" + js(issuers)
+                    + ";window.ISLAND_TOP10=" + js(top10) + ";", 1)
 components.html(html, height=860, scrolling=False)
