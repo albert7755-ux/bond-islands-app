@@ -316,7 +316,19 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab2, tab3 = st.tabs(["📰 債市每日聚焦", "🏢 發行機構簡介", "🔥 熱銷前十大"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📰 債市每日聚焦", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計"])
+    SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
+    SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
+
+    def need_service():
+        st.warning("Secrets 還少了 SUPABASE_SERVICE_KEY（Supabase → Project Settings → API Keys 裡的 service_role／secret key）。"
+                   "它只放在 Streamlit 這邊，不會傳到理專的瀏覽器。")
+
+    def sb_get(path):
+        r = requests.get(f"{SB_URL}/rest/v1/{path}", headers=SBH, timeout=20)
+        if r.status_code != 200:
+            raise RuntimeError(f"{r.status_code} {r.text[:160]}")
+        return r.json()
     with tab1:
         st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。同一天再傳一次會覆蓋。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。")
         with st.form("focus", clear_on_submit=True):
@@ -427,6 +439,73 @@ if qp.get("admin") == "1":
                       f"熱銷前十大更新（{len(items)} 檔）")
             load_json.clear()
             st.success(f"已儲存 {len(items)} 檔，約 5 分鐘內島上就會更新。")
+    with tab4:
+        st.caption("送出後，島上所有人 1 分鐘內會在畫面上方看到金色橫幅「📣 固收科：…」，聊天視窗也會出現。"
+                   "到了設定的時間會自動消失。只有固收科能從這裡發，理專的附近聊天不受影響。")
+        if not SB_SERVICE:
+            need_service()
+        else:
+            now = dt.datetime.now(TZ)
+            with st.form("ann", clear_on_submit=True):
+                msg = st.text_area("廣播內容（最多 200 字，勿含客戶資料）", max_chars=200, height=100)
+                c1, c2 = st.columns(2)
+                ud = c1.date_input("顯示到（日期）", value=now.date())
+                ut = c2.time_input("顯示到（時間）", value=dt.time(18, 0))
+                go4 = st.form_submit_button("送出廣播", type="primary")
+            if go4:
+                until = dt.datetime.combine(ud, ut, tzinfo=TZ)
+                if not msg.strip():
+                    st.warning("請輸入廣播內容。")
+                elif until <= now:
+                    st.warning("顯示到的時間要晚於現在。")
+                else:
+                    r = requests.post(f"{SB_URL}/rest/v1/island_announce", headers=SBH, timeout=20,
+                                      json={"msg": msg.strip(), "until": until.isoformat()})
+                    if r.status_code in (200, 201, 204):
+                        st.success(f"已廣播，顯示到 {until:%m/%d %H:%M}。")
+                    else:
+                        st.error(f"送出失敗（{r.status_code}）：{r.text[:200]}。如果是第一次用，請先在 Supabase 執行設定 SQL。")
+            st.divider()
+            st.markdown("**目前還在顯示的廣播**")
+            try:
+                rows = sb_get("island_announce?select=id,msg,until,created_at&until=gt." + now.isoformat().replace("+", "%2B")
+                              + "&order=created_at.desc")
+                if not rows:
+                    st.caption("沒有。")
+                for a in rows:
+                    u = dt.datetime.fromisoformat(a["until"]).astimezone(TZ)
+                    c1, c2 = st.columns([5, 1])
+                    c1.write(f"{a['msg']}　（到 {u:%m/%d %H:%M}）")
+                    if c2.button("撤下", key=f"ann{a['id']}"):
+                        requests.patch(f"{SB_URL}/rest/v1/island_announce?id=eq.{a['id']}", headers=SBH, timeout=20,
+                                       json={"until": now.isoformat()})
+                        st.rerun()
+            except Exception as e:
+                st.error(f"讀不到廣播（{e}）。如果是第一次用，請先在 Supabase 執行設定 SQL。")
+    with tab5:
+        st.caption("匿名統計：只記這台裝置的隨機代號，不記名字。同一個人用手機和電腦會算兩台裝置。")
+        if not SB_SERVICE:
+            need_service()
+        else:
+            try:
+                daily = sb_get("stats_daily?select=*&limit=60")
+                top = sb_get("stats_top?select=*&limit=30")
+                if daily:
+                    last7 = daily[:7]
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("今天上島人次", daily[0]["上島人次"] if daily[0]["日期"] == dt.datetime.now(TZ).date().isoformat() else 0)
+                    c2.metric("近 7 天上島人次", sum(x["上島人次"] for x in last7))
+                    c3.metric("近 7 天點開內容", sum(x["點開內容次數"] for x in last7))
+                    st.markdown("**每天**")
+                    st.bar_chart({x["日期"]: x["上島人次"] for x in reversed(daily)})
+                    st.dataframe(daily, use_container_width=True, hide_index=True)
+                else:
+                    st.info("還沒有資料。有人上島後就會出現。")
+                st.markdown("**最熱門的內容（累計）**")
+                if top:
+                    st.dataframe(top, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"讀不到統計（{e}）。如果是第一次用，請先在 Supabase 執行設定 SQL。")
     st.stop()
 
 # ---------- 遊樂園島的三款遊戲 ----------
