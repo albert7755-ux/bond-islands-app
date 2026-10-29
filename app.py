@@ -316,7 +316,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📰 債市每日聚焦", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計"])
+    tab1, tab6, tab2, tab3, tab4, tab5 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計"])
     SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
 
@@ -446,6 +446,62 @@ if qp.get("admin") == "1":
                       f"熱銷前十大更新（{len(items)} 檔）")
             load_json.clear()
             st.success(f"已儲存 {len(items)} 檔，約 5 分鐘內島上就會更新。")
+    with tab6:
+        KEYS = {1: "第一把鑰匙・傳承", 2: "第二把鑰匙・資產活化", 3: "第三把鑰匙・客戶的擔心"}
+        st.caption("自己把成交分享放上成交故事島：填好送出，約 5 分鐘內島上就會出現，也會排上 LIVE 跑馬燈和成交日誌。"
+                   "「成交拆解」會先顯示戰報原文的前幾段當重點；之後把這篇丟給 Claude，可以補上完整拆解。")
+        with st.form("case", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            br = c1.text_input("分行", placeholder="例如 大直分行")
+            who = c2.text_input("姓名／稱呼", placeholder="例如 RM4 尚曄")
+            ttl6 = st.text_input("標題", placeholder="例如 債券極速轉向")
+            c3, c4 = st.columns(2)
+            amt = c3.text_input("金額（可不填）", placeholder="例如 USD 53 萬")
+            inc = c4.text_input("副標（可不填）", placeholder="例如 新券 YTM 5.51%")
+            key = st.selectbox("放在哪一把鑰匙", list(KEYS), format_func=lambda k: KEYS[k])
+            raw6 = st.text_area("戰報原文（整段貼上）", height=220)
+            pst = st.file_uploader("海報（可不傳）", type=["png", "jpg", "jpeg", "webp"], key="cpst")
+            go6 = st.form_submit_button("送出", type="primary")
+        if go6:
+            if not ttl6.strip() or not raw6.strip():
+                st.warning("標題和戰報原文一定要填。")
+            else:
+                with st.spinner("上傳中…"):
+                    cid = "up-" + dt.datetime.now(TZ).strftime("%Y%m%d%H%M%S")
+                    has_pst = False
+                    if pst is not None:
+                        from PIL import Image
+                        im = Image.open(io.BytesIO(pst.getvalue())).convert("RGB")
+                        if im.width > 760:
+                            im = im.resize((760, round(im.height * 760 / im.width)))
+                        buf = io.BytesIO()
+                        im.save(buf, "WEBP", quality=78)
+                        gh_put(f"posters/{cid}.webp", buf.getvalue(), f"成交分享海報 {ttl6.strip()}")
+                        has_pst = True
+                    load_json.clear()
+                    lst = list(load_json("cases/index.json", []))
+                    lst.append({"id": cid, "key": key, "br": br.strip(), "who": who.strip(), "title": ttl6.strip(),
+                                "amt": amt.strip(), "inc": inc.strip(), "raw": raw6.strip(), "poster": has_pst,
+                                "added": dt.datetime.now(TZ).date().isoformat()})
+                    save_json("cases/index.json", lst, f"新增成交分享：{ttl6.strip()}")
+                    load_json.clear()
+                    load_posters.clear()
+                st.success(f"「{ttl6.strip()}」已送出，約 5 分鐘內島上就會出現。")
+        st.divider()
+        st.markdown("**自己上傳的成交分享**")
+        lst = load_json("cases/index.json", [])
+        if not lst:
+            st.caption("還沒有。")
+        for c in reversed(lst):
+            c1, c2 = st.columns([5, 1])
+            c1.write(f"{c.get('added', '')}　{c.get('br', '')}・{c.get('who', '')}｜{c.get('title', '')}　（{KEYS.get(c.get('key'), '')}）")
+            if c2.button("刪除", key="delc" + c["id"]):
+                if c.get("poster"):
+                    gh_del(f"posters/{c['id']}.webp", f"刪除成交分享海報 {c.get('title', '')}")
+                save_json("cases/index.json", [x for x in lst if x["id"] != c["id"]], f"刪除成交分享：{c.get('title', '')}")
+                load_json.clear()
+                load_posters.clear()
+                st.rerun()
     with tab4:
         st.caption("送出後，島上所有人 1 分鐘內會在畫面上方看到金色橫幅「📣 固收科：…」，聊天視窗也會出現。"
                    "到了設定的時間會自動消失。只有固收科能從這裡發，理專的附近聊天不受影響。")
@@ -555,6 +611,7 @@ if days:
     focus["latest"] = {"d": L["d"], "title": L.get("title", ""), "text": L.get("text", ""),
                        "imgs": [u for u in (load_image(p) for p in L.get("pages", [])[:4]) if u]}
 top10 = top10_payload()
+up_cases = load_json("cases/index.json", [])
 issuers = {k: {"text": v.get("text", ""), "pages": v.get("pages", [])} for k, v in load_index("issuers").items()}
 def js(o):
     return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
@@ -564,5 +621,6 @@ html = html.replace("/*__ISLAND_CONFIG__*/",
                     "window.ISLAND_CFG=" + json.dumps(cfg) + ";window.ISLAND_POSTERS=" + json.dumps(posters)
                     + ";window.ISLAND_FOCUS=" + js(focus)
                     + ";window.ISLAND_ISSUERS=" + js(issuers)
-                    + ";window.ISLAND_TOP10=" + js(top10) + ";", 1)
+                    + ";window.ISLAND_TOP10=" + js(top10)
+                    + ";window.ISLAND_CASES=" + js(up_cases) + ";", 1)
 components.html(html, height=860, scrolling=False)
