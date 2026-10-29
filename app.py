@@ -316,7 +316,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab6, tab2, tab3, tab4, tab5 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計"])
+    tab1, tab6, tab2, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
     SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
 
@@ -569,6 +569,51 @@ if qp.get("admin") == "1":
                     st.dataframe(top, use_container_width=True, hide_index=True)
             except Exception as e:
                 st.error(f"讀不到統計（{e}）。如果是第一次用，請先在 Supabase 執行設定 SQL。")
+    with tab7:
+        st.caption("處長巡島挑戰的成績。答對 10 分、答錯 3 分，一天找齊 5 位處長再加 10 分；每週一起算。"
+                   "目前" + ("已對所有人開放。" if str(st.secrets.get("QUIZ_ON", "")).strip() == "1"
+                            else "是試玩模式：只有網址加 ?quiz=1 的人看得到。要正式開放，在 Secrets 加一行 QUIZ_ON = \"1\"。"))
+        if not SB_SERVICE:
+            need_service()
+        else:
+            today = dt.datetime.now(TZ).date()
+            monday = today - dt.timedelta(days=today.weekday())
+            wk = st.date_input("看哪一週（選那週任一天）", value=today)
+            start = wk - dt.timedelta(days=wk.weekday())
+            end = start + dt.timedelta(days=7)
+            try:
+                rows = sb_get(f"island_quiz?select=name,br,day,boss,ok,pts&day=gte.{start}&day=lt.{end}&limit=20000")
+                agg = {}
+                for r in rows:
+                    k = (r["name"], r.get("br") or "")
+                    a = agg.setdefault(k, {"days": {}, "ok": 0, "n": 0, "pts": 0})
+                    a["days"][r["day"]] = a["days"].get(r["day"], 0) + 1
+                    a["n"] += 1
+                    a["ok"] += 1 if r["ok"] else 0
+                    a["pts"] += r["pts"]
+                table = []
+                for (n, b), a in agg.items():
+                    full = sum(1 for c in a["days"].values() if c == 5)
+                    table.append({"姓名": n, "分行": b, "分數": a["pts"] + 10 * full, "答題數": a["n"], "答對": a["ok"],
+                                  "答對率": f"{a['ok'] / a['n']:.0%}" if a["n"] else "-", "全勤天數": full, "上島天數": len(a["days"])})
+                table.sort(key=lambda x: (-x["分數"], -x["答對"]))
+                for i, t in enumerate(table, 1):
+                    t["名次"] = i
+                st.markdown(f"**{start:%m/%d}～{end - dt.timedelta(days=1):%m/%d}**　共 {len(table)} 人、{len(rows)} 題")
+                if table:
+                    cols = ["名次", "姓名", "分行", "分數", "答題數", "答對", "答對率", "全勤天數", "上島天數"]
+                    st.dataframe([{c: t[c] for c in cols} for t in table], use_container_width=True, hide_index=True)
+                    import csv
+                    buf = io.StringIO()
+                    w = csv.DictWriter(buf, fieldnames=cols)
+                    w.writeheader()
+                    [w.writerow({c: t[c] for c in cols}) for t in table]
+                    st.download_button("下載 Excel 可開的 CSV", ("\ufeff" + buf.getvalue()).encode("utf-8"),
+                                       file_name=f"處長挑戰_{start}.csv", mime="text/csv")
+                else:
+                    st.info("這週還沒有人答題。")
+            except Exception as e:
+                st.error(f"讀不到成績（{e}）。如果是第一次用，請先在 Supabase 執行處長挑戰的設定 SQL。")
     st.stop()
 
 # ---------- 遊樂園島的三款遊戲 ----------
@@ -602,7 +647,9 @@ if not html.lstrip().lower().startswith("<!doctype"):
     html = ('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             '<style>body{margin:0;font:14px system-ui,sans-serif}</style></head><body>' + html + '</body></html>')
-cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN}
+# 處長巡島挑戰：Secrets 的 QUIZ_ON = "1" 才對所有人開放；試玩時在網址後面加 ?quiz=1
+QUIZ_ON = str(st.secrets.get("QUIZ_ON", "")).strip() == "1" or qp.get("quiz") == "1"
+cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN, "quiz": QUIZ_ON}
 posters = load_posters()
 days = recent_focus()
 focus = {"days": [{"d": x["d"], "title": x.get("title", "")} for x in days], "latest": None}
