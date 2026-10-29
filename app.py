@@ -330,31 +330,38 @@ if qp.get("admin") == "1":
             raise RuntimeError(f"{r.status_code} {r.text[:160]}")
         return r.json()
     with tab1:
-        st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。同一天再傳一次會覆蓋。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。")
+        st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。"
+                   "已經傳過的日期，想只改發行機構或標題：選同一天、改好後按上傳，不用重傳檔案（沒選新檔案就保留原本的）。")
         with st.form("focus", clear_on_submit=True):
             day = st.date_input("日期", value=dt.datetime.now(TZ).date())
-            ttl = st.text_input("標題（可不填）")
+            iss = st.selectbox("發行機構（顯示成標題）", ["（不選）"] + [n for _, n in ISSUERS] + ["其他（自己打在下面）"])
+            ttl = st.text_input("標題（可不填；有選發行機構就不用打）")
             txt = st.text_area("文字重點（可不填）", height=120)
             ups = st.file_uploader("檔案", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
             go = st.form_submit_button("上傳", type="primary")
         if go:
-            if not ups and not txt.strip():
-                st.warning("檔案和文字至少要有一個。")
+            d = day.isoformat()
+            load_index.clear()
+            idx = [x for x in load_index("focus")]
+            old = next((x for x in idx if x.get("d") == d), None)
+            title = ttl.strip() or (iss if iss not in ("（不選）", "其他（自己打在下面）") else "")
+            if not ups and not txt.strip() and not (old and title):
+                st.warning("檔案和文字至少要有一個（已傳過的日期，可以只改發行機構或標題）。")
             else:
                 with st.spinner("上傳中…"):
-                    d = day.isoformat()
-                    idx = load_index("focus")
-                    load_index.clear()
-                    idx = [x for x in load_index("focus")]
-                    old = next((x for x in idx if x.get("d") == d), None)
-                    for pth in (old or {}).get("pages", []):
-                        gh_del(pth, f"每日聚焦 {d}：覆蓋舊檔")
-                    pages = []
-                    for n, b in enumerate(to_pages(ups or []), 1):
-                        pth = f"focus/{d}/p{n}.webp"
-                        gh_put(pth, b, f"每日聚焦 {d} 第 {n} 頁")
-                        pages.append(pth)
-                    idx = [x for x in idx if x.get("d") != d] + [{"d": d, "title": ttl.strip(), "text": txt.strip(), "pages": pages}]
+                    if ups:
+                        for pth in (old or {}).get("pages", []):
+                            gh_del(pth, f"每日聚焦 {d}：覆蓋舊檔")
+                        pages = []
+                        for n, b in enumerate(to_pages(ups), 1):
+                            pth = f"focus/{d}/p{n}.webp"
+                            gh_put(pth, b, f"每日聚焦 {d} 第 {n} 頁")
+                            pages.append(pth)
+                    else:
+                        pages = (old or {}).get("pages", [])
+                    new_txt = txt.strip() or ((old or {}).get("text", "") if not ups else "")
+                    new_title = title or ((old or {}).get("title", "") if not ups else "")
+                    idx = [x for x in idx if x.get("d") != d] + [{"d": d, "title": new_title, "text": new_txt, "pages": pages}]
                     cut = (dt.datetime.now(TZ).date() - dt.timedelta(days=KEEP_DAYS)).isoformat()
                     for x in [x for x in idx if x.get("d", "") < cut]:
                         for pth in x.get("pages", []):
