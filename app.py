@@ -316,7 +316,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab6, tab2, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
+    tab1, tab6, tab8, tab2, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
     SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
 
@@ -569,6 +569,52 @@ if qp.get("admin") == "1":
                     st.dataframe(top, use_container_width=True, hide_index=True)
             except Exception as e:
                 st.error(f"讀不到統計（{e}）。如果是第一次用，請先在 Supabase 執行設定 SQL。")
+    with tab8:
+        st.caption("回覆會顯示在島上那則留言底下（「官方回覆」）。置頂的排最前面；隱藏後大家看不到，但資料還在；刪除就永久刪掉。")
+        if not SB_SERVICE:
+            need_service()
+        else:
+            try:
+                rows = sb_get("island_board?select=id,created_at,name,branch,category,topic,body,reply,pinned,hidden&order=created_at.desc&limit=200")
+                only_new = st.checkbox("只看還沒回覆的", value=False)
+                shown = [r for r in rows if not (only_new and r.get("reply"))]
+                st.caption(f"共 {len(rows)} 則，還沒回覆 {sum(1 for r in rows if not r.get('reply'))} 則。")
+                for r in shown:
+                    t = dt.datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(TZ)
+                    tags = ("📌 置頂　" if r.get("pinned") else "") + ("🙈 已隱藏　" if r.get("hidden") else "")
+                    with st.container(border=True):
+                        st.markdown(f"**{r['category']}**{'　#' + r['topic'] if r.get('topic') else ''}　·　"
+                                    f"{r['name']}{'・' + r['branch'] if r.get('branch') else ''}　·　{t:%m/%d %H:%M}　{tags}")
+                        st.write(r["body"])
+                        rid = r["id"]
+                        rp = st.text_area("官方回覆", value=r.get("reply") or "", key=f"rp{rid}", height=80)
+                        c1, c2, c3, c4 = st.columns(4)
+                        if c1.button("儲存回覆", key=f"sv{rid}", type="primary"):
+                            body = {"reply": rp.strip() or None, "replied_at": dt.datetime.now(TZ).isoformat() if rp.strip() else None}
+                            requests.patch(f"{SB_URL}/rest/v1/island_board?id=eq.{rid}", headers=SBH, json=body, timeout=20)
+                            st.rerun()
+                        if c2.button("取消置頂" if r.get("pinned") else "置頂", key=f"pn{rid}"):
+                            requests.patch(f"{SB_URL}/rest/v1/island_board?id=eq.{rid}", headers=SBH, json={"pinned": not r.get("pinned")}, timeout=20)
+                            st.rerun()
+                        if c3.button("取消隱藏" if r.get("hidden") else "隱藏", key=f"hd{rid}"):
+                            requests.patch(f"{SB_URL}/rest/v1/island_board?id=eq.{rid}", headers=SBH, json={"hidden": not r.get("hidden")}, timeout=20)
+                            st.rerun()
+                        if c4.button("刪除", key=f"dl{rid}"):
+                            st.session_state[f"cf{rid}"] = True
+                        if st.session_state.get(f"cf{rid}"):
+                            st.warning("確定要永久刪除這則留言嗎？")
+                            d1, d2 = st.columns(2)
+                            if d1.button("確定刪除", key=f"dy{rid}"):
+                                requests.delete(f"{SB_URL}/rest/v1/island_board?id=eq.{rid}", headers=SBH, timeout=20)
+                                st.session_state.pop(f"cf{rid}", None)
+                                st.rerun()
+                            if d2.button("取消", key=f"dn{rid}"):
+                                st.session_state.pop(f"cf{rid}", None)
+                                st.rerun()
+                if not shown:
+                    st.info("沒有留言。")
+            except Exception as e:
+                st.error(f"讀不到留言（{e}）。")
     with tab7:
         st.caption("處長巡島挑戰的成績。答對 10 分、答錯 3 分，一天找齊 5 位處長再加 10 分；每週一起算。"
                    "目前" + ("已對所有人開放。" if str(st.secrets.get("QUIZ_ON", "")).strip() == "1"
