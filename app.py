@@ -532,6 +532,58 @@ if qp.get("admin") == "1":
                 load_json.clear()
                 load_posters.clear()
                 st.rerun()
+        st.divider()
+        st.markdown("### 🎬 成交故事影片")
+        st.caption("選一篇成交故事、上傳 MP4，島上那篇就會多一個「🎬 影片」分頁。同一篇再傳一次會覆蓋。影片會自動壓縮，建議 3 分鐘以內。")
+        import re as _re
+        opts = {}
+        try:
+            src = load_content("island.html")
+            for m in _re.finditer(r"\{id:'(case-[a-z0-9]+)',key:(\d),full:[a-z]+,br:'([^']*)',who:'([^']*)',title:'([^']*)'", src):
+                opts[m.group(1)] = f"{m.group(3)}・{m.group(4)}｜{m.group(5)}" if m.group(4) else f"{m.group(3)}｜{m.group(5)}"
+        except Exception:
+            pass
+        for c in load_json("cases/index.json", []):
+            opts[c["id"]] = f"{c.get('br', '')}・{c.get('who', '')}｜{c.get('title', '')}（自己上傳）"
+        have = set(video_ids())
+        with st.form("video", clear_on_submit=True):
+            ids = list(reversed(list(opts)))
+            cid = st.selectbox("哪一篇成交故事", ids, format_func=lambda i: ("🎬 " if i in have else "") + opts[i]) if ids else None
+            vf = st.file_uploader("影片（MP4／MOV）", type=["mp4", "mov", "m4v"], key="vup")
+            go9 = st.form_submit_button("上傳影片", type="primary")
+        if go9:
+            if not cid or vf is None:
+                st.warning("請選成交故事並選影片檔。")
+            else:
+                with st.spinner("壓縮並上傳中，影片較大時要等一下…"):
+                    import shutil, subprocess, tempfile, os as _os
+                    raw = vf.getvalue()
+                    data = raw
+                    if shutil.which("ffmpeg"):
+                        with tempfile.TemporaryDirectory() as td:
+                            ip, op = _os.path.join(td, "in"), _os.path.join(td, "out.mp4")
+                            open(ip, "wb").write(raw)
+                            r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", ip, "-vf", "scale='min(720,iw)':-2",
+                                                "-c:v", "libx264", "-crf", "27", "-preset", "veryfast", "-c:a", "aac", "-b:a", "96k",
+                                                "-movflags", "+faststart", op], capture_output=True, timeout=600)
+                            if r.returncode == 0 and _os.path.exists(op):
+                                data = open(op, "rb").read()
+                    if len(data) > 45_000_000:
+                        st.error(f"影片壓縮後還有 {len(data) / 1e6:.0f}MB，太大了（上限約 45MB）。請剪短一點再傳。")
+                    else:
+                        gh_put(f"videos/{cid}.mp4", data, f"成交故事影片：{opts[cid]}")
+                        video_ids.clear()
+                        load_video.clear()
+                        st.success(f"已上傳（{len(data) / 1e6:.1f}MB），約 5 分鐘內島上「{opts[cid]}」就會出現影片分頁。")
+        if have:
+            st.markdown("**已有影片的成交故事**")
+            for vid in sorted(have):
+                c1, c2 = st.columns([5, 1])
+                c1.write(opts.get(vid, vid))
+                if c2.button("刪除", key="delv" + vid):
+                    gh_del(f"videos/{vid}.mp4", f"刪除成交故事影片 {vid}")
+                    video_ids.clear()
+                    st.rerun()
     with tab4:
         st.caption("送出後，島上所有人 1 分鐘內會在畫面上方看到金色橫幅「📣 固收科：…」，聊天視窗也會出現。"
                    "到了設定的時間會自動消失。只有固收科能從這裡發，理專的附近聊天不受影響。")
