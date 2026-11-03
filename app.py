@@ -153,6 +153,24 @@ def top10_payload():
     return {"date": q.get("date", ""), "title": cfg.get("title", "熱銷前十大"), "items": out}
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def video_ids():
+    """私人 repo 的 videos 資料夾：檔名＝成交故事代號，例如 videos/case-qf2.mp4"""
+    head = {"Authorization": f"Bearer {GH_TOKEN}", "X-GitHub-Api-Version": "2022-11-28", "Accept": "application/vnd.github+json"}
+    try:
+        r = requests.get(f"https://api.github.com/repos/{CONTENT_REPO}/contents/videos?ref={CONTENT_BRANCH}", headers=head, timeout=20)
+        if r.status_code != 200:
+            return []
+        return [f["name"][:-4] for f in r.json() if f.get("type") == "file" and f["name"].lower().endswith(".mp4")]
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=10)
+def load_video(vid: str):
+    return gh_raw(f"videos/{vid}.mp4")
+
+
 def recent_focus():
     cut = (dt.datetime.now(TZ).date() - dt.timedelta(days=KEEP_DAYS)).isoformat()
     return [x for x in load_index("focus") if x.get("d", "") >= cut]
@@ -221,6 +239,18 @@ APP_URL = st.secrets.get("APP_URL", f"https://{host}/" if host else "")
 
 # ---------- 放大看：債市每日聚焦／發行機構簡介 ----------
 view = qp.get("view")
+if view == "video":
+    st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:520px;padding-top:1rem}</style>",
+                unsafe_allow_html=True)
+    vid = qp.get("id", "")
+    data = load_video(vid) if vid in video_ids() else None
+    st.subheader("🎬 成交故事影片")
+    if not data:
+        st.info("找不到這支影片。")
+    else:
+        st.video(data, format="video/mp4")
+    st.caption("僅供內部教育訓練使用，請勿外流。")
+    st.stop()
 if view in ("focus", "issuer"):
     st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
                 unsafe_allow_html=True)
@@ -705,6 +735,7 @@ if days:
                        "imgs": [u for u in (load_image(p) for p in L.get("pages", [])[:4]) if u]}
 top10 = top10_payload()
 up_cases = load_json("cases/index.json", [])
+videos = video_ids()
 issuers = {k: {"text": v.get("text", ""), "pages": v.get("pages", [])} for k, v in load_index("issuers").items()}
 def js(o):
     return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
@@ -715,5 +746,6 @@ html = html.replace("/*__ISLAND_CONFIG__*/",
                     + ";window.ISLAND_FOCUS=" + js(focus)
                     + ";window.ISLAND_ISSUERS=" + js(issuers)
                     + ";window.ISLAND_TOP10=" + js(top10)
-                    + ";window.ISLAND_CASES=" + js(up_cases) + ";", 1)
+                    + ";window.ISLAND_CASES=" + js(up_cases)
+                    + ";window.ISLAND_VIDEOS=" + js(videos) + ";", 1)
 components.html(html, height=860, scrolling=False)
