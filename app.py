@@ -100,6 +100,7 @@ ISSUERS = [("gs", "高盛集團"), ("socgen", "法國興業銀行"), ("wfc", "�
            ("gild", "吉利德科學")]
 ISSUER_NAME = dict(ISSUERS)
 KEEP_DAYS = 60
+EARN_KEEP = 4  # 財報解讀：每家公司只留最近幾季
 TZ = ZoneInfo("Asia/Taipei")
 
 
@@ -251,6 +252,22 @@ if view == "video":
         st.video(data, format="video/mp4")
     st.caption("僅供內部教育訓練使用，請勿外流。")
     st.stop()
+if view == "earn":
+    st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
+                unsafe_allow_html=True)
+    x = next((y for y in load_json("earnings/index.json", []) if y["id"] == qp.get("id", "")), None)
+    if not x:
+        st.info("找不到這份財報解讀，可能已經被更新或刪除了。")
+        st.stop()
+    st.subheader(f"📑 {x['issuer']}｜{x['q']}" + (f"｜{x['title']}" if x.get("title") else ""))
+    if x.get("text"):
+        st.write(x["text"])
+    for pth in x.get("pages", []):
+        src = load_image(pth)
+        if src:
+            st.image(src, use_container_width=True)
+    st.caption("僅供內部教育訓練使用，請勿外流；非投資建議。")
+    st.stop()
 if view in ("focus", "issuer"):
     st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
                 unsafe_allow_html=True)
@@ -346,7 +363,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab6, tab8, tab2, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
+    tab1, tab6, tab8, tab2, tab9, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "📑 財報解讀", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
     SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
 
@@ -449,6 +466,60 @@ if qp.get("admin") == "1":
                     save_json("issuers/index.json", {k: v for k, v in idx.items() if k != i}, f"刪除 {n} 簡介")
                     load_index.clear()
                     st.rerun()
+    with tab9:
+        st.caption(f"上傳發行機構的財報會議紀要或財報解讀（PDF 或圖片），會出現在本月主推島「本季主推發行機構」的「📑 財報解讀」。"
+                   f"每家公司只留最近 {EARN_KEEP} 季，舊的自動刪除。「重點」欄打的字會直接顯示在島上，可不填。")
+        with st.form("earn", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            pick = c1.selectbox("發行機構", ["（自己打）"] + [n for _, n in ISSUERS])
+            own = c2.text_input("自己打發行機構名稱", placeholder="例如 輝瑞")
+            c3, c4 = st.columns(2)
+            qtr = c3.text_input("哪一季", placeholder="例如 2026Q3")
+            ttl9 = c4.text_input("標題（可不填）", placeholder="例如 第三季財報會議重點")
+            txt9 = st.text_area("重點（可不填，會直接顯示在島上）", height=160)
+            ups9 = st.file_uploader("檔案（PDF 或圖片，可多張）", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="eu")
+            go10 = st.form_submit_button("上傳", type="primary")
+        if go10:
+            iss = own.strip() or (pick if pick != "（自己打）" else "")
+            if not iss or not qtr.strip() or not ups9:
+                st.warning("發行機構、哪一季、檔案都要有。")
+            else:
+                with st.spinner("上傳中…"):
+                    load_json.clear()
+                    idx = list(load_json("earnings/index.json", []))
+                    eid = "e" + dt.datetime.now(TZ).strftime("%Y%m%d%H%M%S")
+                    pages = []
+                    for n, b in enumerate(to_pages(ups9), 1):
+                        pth = f"earnings/{eid}/p{n}.webp"
+                        gh_put(pth, b, f"財報解讀 {iss} {qtr.strip()} 第 {n} 頁")
+                        pages.append(pth)
+                    same = [x for x in idx if x["issuer"] == iss and x["q"] == qtr.strip()]
+                    for x in same:
+                        for pth in x.get("pages", []):
+                            gh_del(pth, f"財報解讀 {iss} {qtr.strip()}：覆蓋舊檔")
+                    idx = [x for x in idx if x not in same]
+                    idx.append({"id": eid, "issuer": iss, "q": qtr.strip(), "title": ttl9.strip(), "text": txt9.strip(),
+                                "pages": pages, "added": dt.datetime.now(TZ).date().isoformat()})
+                    mine = sorted([x for x in idx if x["issuer"] == iss], key=lambda x: x["q"], reverse=True)
+                    for x in mine[EARN_KEEP:]:
+                        for pth in x.get("pages", []):
+                            gh_del(pth, f"財報解讀 {iss} {x['q']} 超過 {EARN_KEEP} 季，自動刪除")
+                        idx.remove(x)
+                    save_json("earnings/index.json", idx, f"財報解讀清單更新：{iss} {qtr.strip()}")
+                    load_json.clear()
+                st.success(f"{iss} {qtr.strip()} 上傳完成，約 5 分鐘內島上就會更新。")
+        st.divider()
+        st.markdown("**目前的財報解讀**")
+        for x in sorted(load_json("earnings/index.json", []), key=lambda x: (x["issuer"], x["q"])):
+            c1, c2 = st.columns([5, 1])
+            c1.write(f"{x['issuer']}　{x['q']}　{x.get('title', '')}（{len(x.get('pages', []))} 頁）")
+            if c2.button("刪除", key="dele" + x["id"]):
+                for pth in x.get("pages", []):
+                    gh_del(pth, f"刪除財報解讀 {x['issuer']} {x['q']}")
+                save_json("earnings/index.json", [y for y in load_json("earnings/index.json", []) if y["id"] != x["id"]],
+                          f"刪除財報解讀 {x['issuer']} {x['q']}")
+                load_json.clear()
+                st.rerun()
     with tab3:
         st.caption("依排名填產品代碼（WMBB 開頭），價格、YTM、評等等等會自動從每天上傳的報價檔帶入。"
                    "LTV 報價檔沒有，要自己填（例如 0.75），不填就顯示「－」。")
@@ -788,6 +859,7 @@ if days:
 top10 = top10_payload()
 up_cases = load_json("cases/index.json", [])
 videos = video_ids()
+earn = [{k: x.get(k, "") for k in ("id", "issuer", "q", "title", "text")} for x in load_json("earnings/index.json", [])]
 issuers = {k: {"text": v.get("text", ""), "pages": v.get("pages", [])} for k, v in load_index("issuers").items()}
 def js(o):
     return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
@@ -799,5 +871,6 @@ html = html.replace("/*__ISLAND_CONFIG__*/",
                     + ";window.ISLAND_ISSUERS=" + js(issuers)
                     + ";window.ISLAND_TOP10=" + js(top10)
                     + ";window.ISLAND_CASES=" + js(up_cases)
-                    + ";window.ISLAND_VIDEOS=" + js(videos) + ";", 1)
+                    + ";window.ISLAND_VIDEOS=" + js(videos)
+                    + ";window.ISLAND_EARN=" + js(earn) + ";", 1)
 components.html(html, height=860, scrolling=False)
