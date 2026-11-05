@@ -100,7 +100,7 @@ ISSUERS = [("gs", "高盛集團"), ("socgen", "法國興業銀行"), ("wfc", "�
            ("gild", "吉利德科學")]
 ISSUER_NAME = dict(ISSUERS)
 KEEP_DAYS = 60
-EARN_KEEP = 4  # 財報解讀：每家公司只留最近幾季
+EARN_KEEP = 2  # 財報解讀：每家公司只留最近幾季
 TZ = ZoneInfo("Asia/Taipei")
 
 
