@@ -101,6 +101,7 @@ ISSUERS = [("gs", "高盛集團"), ("socgen", "法國興業銀行"), ("wfc", "�
 ISSUER_NAME = dict(ISSUERS)
 KEEP_DAYS = 60
 EARN_KEEP = 2  # 財報解讀：每家公司只留最近幾季
+VIEW_KEEP = 30  # 固收觀點：保留最近幾篇
 TZ = ZoneInfo("Asia/Taipei")
 
 
@@ -252,6 +253,22 @@ if view == "video":
         st.video(data, format="video/mp4")
     st.caption("僅供內部教育訓練使用，請勿外流。")
     st.stop()
+if view == "opinion":
+    st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
+                unsafe_allow_html=True)
+    x = next((y for y in load_json("views/index.json", []) if y["id"] == qp.get("id", "")), None)
+    if not x:
+        st.info("找不到這篇固收觀點，可能已經被更新或刪除了。")
+        st.stop()
+    st.subheader(f"🧭 固收觀點｜{x['d']}" + (f"｜{x['title']}" if x.get("title") else ""))
+    if x.get("text"):
+        st.write(x["text"])
+    for pth in x.get("pages", []):
+        src = load_image(pth)
+        if src:
+            st.image(src, use_container_width=True)
+    st.caption("固收科觀點，僅供內部教育訓練使用，請勿外流；非投資建議。")
+    st.stop()
 if view == "earn":
     st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
                 unsafe_allow_html=True)
@@ -363,7 +380,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab6, tab8, tab2, tab9, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "📑 財報解讀", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
+    tab1, tab10, tab6, tab8, tab2, tab9, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🧭 固收觀點", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "📑 財報解讀", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
     SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
 
@@ -427,6 +444,51 @@ if qp.get("admin") == "1":
                     gh_del(pth, f"刪除每日聚焦 {x['d']}")
                 save_json("focus/index.json", [y for y in load_index("focus") if y["d"] != x["d"]], f"刪除每日聚焦 {x['d']}")
                 load_index.clear()
+                st.rerun()
+    with tab10:
+        st.caption(f"固收科自己寫的觀點（週報、月報、專題都可以）。可以傳 PDF 或圖片，也可以只打文字。"
+                   f"島上保留最近 {VIEW_KEEP} 篇，最新的一篇會直接顯示在「每日聚焦・固收觀點」那棟。")
+        with st.form("opinion", clear_on_submit=True):
+            vday = st.date_input("日期", value=dt.datetime.now(TZ).date(), key="vday")
+            vttl = st.text_input("標題（必填，例如：11 月固收觀點｜降息循環下的長率布局）")
+            vtxt = st.text_area("重點（會直接顯示在島上，可不填）", height=160)
+            vups = st.file_uploader("檔案", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key="vups")
+            vgo = st.form_submit_button("上傳", type="primary")
+        if vgo:
+            if not vttl.strip():
+                st.warning("請填標題。")
+            elif not vups and not vtxt.strip():
+                st.warning("檔案和重點文字至少要有一個。")
+            else:
+                with st.spinner("上傳中…"):
+                    vid = "v" + dt.datetime.now(TZ).strftime("%Y%m%d%H%M%S")
+                    pages = []
+                    for n, b in enumerate(to_pages(vups or []), 1):
+                        pth = f"views/{vid}/p{n}.webp"
+                        gh_put(pth, b, f"固收觀點 {vttl.strip()} 第 {n} 頁")
+                        pages.append(pth)
+                    load_json.clear()
+                    vidx = load_json("views/index.json", []) + [{"id": vid, "d": vday.isoformat(), "title": vttl.strip(),
+                                                                  "text": vtxt.strip(), "pages": pages}]
+                    vidx = sorted(vidx, key=lambda x: (x["d"], x["id"]), reverse=True)
+                    for x in vidx[VIEW_KEEP:]:
+                        for pth in x.get("pages", []):
+                            gh_del(pth, f"固收觀點 {x['title']} 超過 {VIEW_KEEP} 篇，自動刪除")
+                    save_json("views/index.json", vidx[:VIEW_KEEP], f"固收觀點清單更新（{vttl.strip()}）")
+                    load_json.clear()
+                st.success("上傳完成，約 5 分鐘內島上就會更新。")
+        st.divider()
+        st.markdown("**目前島上的固收觀點**")
+        for x in load_json("views/index.json", []):
+            c1, c2 = st.columns([5, 1])
+            c1.write(f"{x['d']}　{x.get('title', '')}　（{len(x.get('pages', []))} 頁）")
+            if c2.button("刪除", key="delv" + x["id"]):
+                for pth in x.get("pages", []):
+                    gh_del(pth, f"刪除固收觀點 {x['title']}")
+                load_json.clear()
+                save_json("views/index.json", [y for y in load_json("views/index.json", []) if y["id"] != x["id"]],
+                          f"刪除固收觀點 {x['title']}")
+                load_json.clear()
                 st.rerun()
     with tab2:
         st.caption("選一家發行機構，傳 PDF 或圖片，或打一段文字簡介。再傳一次會覆蓋舊的。")
@@ -861,6 +923,12 @@ up_cases = load_json("cases/index.json", [])
 videos = video_ids()
 earn = [{k: x.get(k, "") for k in ("id", "issuer", "q", "title", "text")} for x in load_json("earnings/index.json", [])]
 issuers = {k: {"text": v.get("text", ""), "pages": v.get("pages", [])} for k, v in load_index("issuers").items()}
+vlist = load_json("views/index.json", [])
+views = {"list": [{k: x.get(k, "") for k in ("id", "d", "title")} for x in vlist], "latest": None}
+if vlist:
+    V = vlist[0]
+    views["latest"] = {"id": V["id"], "d": V["d"], "title": V.get("title", ""), "text": V.get("text", ""),
+                       "imgs": [u for u in (load_image(p) for p in V.get("pages", [])[:3]) if u]}
 def js(o):
     return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
 
@@ -872,5 +940,6 @@ html = html.replace("/*__ISLAND_CONFIG__*/",
                     + ";window.ISLAND_TOP10=" + js(top10)
                     + ";window.ISLAND_CASES=" + js(up_cases)
                     + ";window.ISLAND_VIDEOS=" + js(videos)
-                    + ";window.ISLAND_EARN=" + js(earn) + ";", 1)
+                    + ";window.ISLAND_EARN=" + js(earn)
+                    + ";window.ISLAND_VIEWS=" + js(views) + ";", 1)
 components.html(html, height=860, scrolling=False)
