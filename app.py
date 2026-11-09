@@ -944,8 +944,8 @@ if not html.lstrip().lower().startswith("<!doctype"):
     html = ('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             '<style>body{margin:0;font:14px system-ui,sans-serif}</style></head><body>' + html + '</body></html>')
-# 處長巡島挑戰：Secrets 的 QUIZ_ON = "1" 才對所有人開放；試玩時在網址後面加 ?quiz=1
-QUIZ_ON = str(st.secrets.get("QUIZ_ON", "")).strip() == "1" or qp.get("quiz") == "1"
+# 處長巡島挑戰（處長隨堂考）：2026/11/9 起對所有人開放。要暫停的話，在 Secrets 設 QUIZ_ON = "0"
+QUIZ_ON = str(st.secrets.get("QUIZ_ON", "1")).strip() != "0" or qp.get("quiz") == "1"
 cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN, "quiz": QUIZ_ON}
 posters = load_posters()
 days = recent_focus()
