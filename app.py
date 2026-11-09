@@ -11,6 +11,8 @@
 - ?view=focus&d=日期、?view=issuer&id=代號 是放大看的頁面
 """
 import base64
+import pathlib
+import re
 import datetime as dt
 import hashlib
 import io
@@ -68,7 +70,27 @@ def load_content(path: str) -> str:
     return r.text
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+def thumb(b: bytes, w: int = 420, q: int = 50) -> bytes:
+    """島上直接顯示用的縮圖（原圖另外用「看高解析」開新分頁）。轉不了就回原檔。"""
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(b)).convert("RGB")
+        if im.width > w:
+            im = im.resize((w, round(im.height * w / im.width)))
+        out = io.BytesIO()
+        im.save(out, "WEBP", quality=q)
+        return out.getvalue() if out.tell() < len(b) else b
+    except Exception:
+        return b
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_thumb(path: str, w: int = 560) -> str:
+    b = gh_raw(path)
+    return ("data:image/webp;base64," + base64.b64encode(thumb(b, w)).decode()) if b else ""
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def load_posters() -> dict:
     """讀私人 repo 的 posters 資料夾（成交故事島的戰報海報）。
     檔名就是案例代號，例如 posters/case-hl.webp。資料夾不存在就回傳空的。"""
@@ -87,7 +109,7 @@ def load_posters() -> dict:
                 continue
             b = requests.get(f["url"], timeout=20, headers={**head, "Accept": "application/vnd.github.raw"})
             if b.status_code == 200:
-                out[stem] = f"data:{mime[ext.lower()]};base64," + base64.b64encode(b.content).decode()
+                out[stem] = "data:image/webp;base64," + base64.b64encode(thumb(b.content)).decode()
         return out
     except Exception:
         return {}
@@ -252,6 +274,20 @@ if view == "video":
     else:
         st.video(data, format="video/mp4")
     st.caption("僅供內部教育訓練使用，請勿外流。")
+    st.stop()
+if view == "poster":
+    st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
+                unsafe_allow_html=True)
+    cid = re.sub(r"[^a-z0-9-]", "", qp.get("id", ""))
+    shown = 0
+    for stem in [cid] + [f"{cid}-{n}" for n in range(2, 6)]:
+        src = load_image(f"posters/{stem}.webp") if cid else ""
+        if src:
+            st.image(src, use_container_width=True)
+            shown += 1
+    if not shown:
+        st.info("找不到這張海報，可能已經被更新或刪除了。")
+    st.caption("僅供內部教育訓練使用，請勿外流；非投資建議。")
     st.stop()
 if view == "opinion":
     st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
@@ -917,7 +953,7 @@ focus = {"days": [{"d": x["d"], "title": x.get("title", "")} for x in days], "la
 if days:
     L = days[0]
     focus["latest"] = {"d": L["d"], "title": L.get("title", ""), "text": L.get("text", ""),
-                       "imgs": [u for u in (load_image(p) for p in L.get("pages", [])[:4]) if u]}
+                       "imgs": [u for u in (load_thumb(p, 600) for p in L.get("pages", [])[:4]) if u]}
 top10 = top10_payload()
 up_cases = load_json("cases/index.json", [])
 videos = video_ids()
@@ -928,7 +964,23 @@ views = {"list": [{k: x.get(k, "") for k in ("id", "d", "title")} for x in vlist
 if vlist:
     V = vlist[0]
     views["latest"] = {"id": V["id"], "d": V["d"], "title": V.get("title", ""), "text": V.get("text", ""),
-                       "imgs": [u for u in (load_image(p) for p in V.get("pages", [])[:3]) if u]}
+                       "imgs": [u for u in (load_thumb(p, 600) for p in V.get("pages", [])[:3]) if u]}
+@st.cache_resource(show_spinner=False)
+def _vendor(name: str) -> str:
+    return (pathlib.Path(__file__).parent / "vendor" / name).read_text(encoding="utf-8")
+
+
+def inline_three(h: str) -> str:
+    for tag, f in ((r'<script src="https://cdnjs\.cloudflare\.com/ajax/libs/three\.js/r128/three\.min\.js"></script>', "three-r128.min.js"),
+                   (r'<script src="https://cdn\.jsdelivr\.net/npm/three@0\.128\.0/examples/js/controls/OrbitControls\.js"></script>', "OrbitControls-r128.js")):
+        try:
+            code = _vendor(f)
+            h = re.sub(tag, lambda m: "<script>" + code + "</script>", h, count=1)
+        except Exception:
+            pass
+    return h
+
+
 def js(o):
     return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
 
@@ -942,4 +994,6 @@ html = html.replace("/*__ISLAND_CONFIG__*/",
                     + ";window.ISLAND_VIDEOS=" + js(videos)
                     + ";window.ISLAND_EARN=" + js(earn)
                     + ";window.ISLAND_VIEWS=" + js(views) + ";", 1)
+# 3D 引擎直接內嵌，不向外部 CDN 下載（行內網路可能擋 cdnjs / jsdelivr）
+html = inline_three(html)
 components.html(html, height=860, scrolling=False)
