@@ -868,8 +868,9 @@ if qp.get("admin") == "1":
                 st.error(f"讀不到留言（{e}）。")
     with tab7:
         st.caption("處長巡島挑戰的成績。答對 10 分、答錯 3 分，一天找齊 5 位處長再加 10 分；每週一起算。"
-                   "目前" + ("已對所有人開放。" if str(st.secrets.get("QUIZ_ON", "")).strip() == "1"
-                            else "是試玩模式：只有網址加 ?quiz=1 的人看得到。要正式開放，在 Secrets 加一行 QUIZ_ON = \"1\"。"))
+                   "目前" + ("已對所有人開放（要暫停的話，在 Secrets 設 QUIZ_ON = \"0\"）。" if QUIZ_ON
+                            else "暫停中：只有網址加 ?quiz=1 的人看得到。")
+                   + "分行填「固收」的固收科同仁不列入排名（島上和這裡都一樣）。")
         if not SB_SERVICE:
             need_service()
         else:
@@ -881,6 +882,7 @@ if qp.get("admin") == "1":
             try:
                 rows = sb_get(f"island_quiz?select=name,br,day,boss,ok,pts&day=gte.{start}&day=lt.{end}&limit=20000")
                 agg = {}
+                rows = [r for r in rows if (r.get("br") or "").strip() != "固收"]
                 for r in rows:
                     k = (r["name"], r.get("br") or "")
                     a = agg.setdefault(k, {"days": {}, "ok": 0, "n": 0, "pts": 0})
@@ -904,7 +906,8 @@ if qp.get("admin") == "1":
                     buf = io.StringIO()
                     w = csv.DictWriter(buf, fieldnames=cols)
                     w.writeheader()
-                    [w.writerow({c: t[c] for c in cols}) for t in table]
+                    for t in table:
+                        w.writerow({c: t[c] for c in cols})
                     st.download_button("下載 Excel 可開的 CSV", ("\ufeff" + buf.getvalue()).encode("utf-8"),
                                        file_name=f"處長挑戰_{start}.csv", mime="text/csv")
                 else:
