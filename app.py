@@ -868,7 +868,7 @@ if qp.get("admin") == "1":
                 st.error(f"讀不到留言（{e}）。")
     with tab7:
         st.caption("處長巡島挑戰的成績。答對 10 分、答錯 3 分，一天找齊 5 位處長再加 10 分；每週一起算。"
-                   "目前" + ("已對所有人開放（要暫停的話，在 Secrets 設 QUIZ_ON = \"0\"）。" if QUIZ_ON
+                   "目前" + ("已對所有人開放（要暫停的話，在 Secrets 設 QUIZ_ON = \"0\"）。" if str(st.secrets.get("QUIZ_ON", "1")).strip() != "0"
                             else "暫停中：只有網址加 ?quiz=1 的人看得到。")
                    + "分行填「固收」的固收科同仁不列入排名（島上和這裡都一樣）。")
         if not SB_SERVICE:
