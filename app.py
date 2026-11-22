@@ -2,7 +2,7 @@
 這個 repo 只有外殼，島的內容放在私人 repo（Secrets 的 CONTENT_REPO），
 執行時用唯讀的 GitHub 通行碼（GH_TOKEN）去讀，所以內容不會公開。
 
-- 先輸入授權碼（和投資機長箱同一組，Secrets 的 PORTAL_PASSWORD）
+- 先輸入授權碼（存在群島 Supabase 的 island_settings，只存雜湊；讀不到時才用 Secrets 的 PORTAL_PASSWORD）
 - 通過後載入 island.html，並把 Supabase 設定注入網頁
 - ?game=coupon / stopwatch / forest 會開啟遊樂園島上的三款遊戲
 - 私人 repo 的 posters 資料夾放成交故事島的戰報海報（檔名＝案例代號）
@@ -210,8 +210,40 @@ def show_load_error(path: str, err: Exception) -> None:
     st.error(why)
 
 
-# 遊戲連結帶的通行碼（由授權碼推算，換授權碼就會一起失效）
-TOKEN = hashlib.sha256(f"bond-islands:{PASSWORD}".encode()).hexdigest()[:20]
+# ---------- 群島密碼 ----------
+# 優先用 Supabase island_settings 的雜湊（只存 sha256，不存明碼；只有 service key 讀得到），
+# 這樣換密碼不用動 Secrets；資料庫讀不到時才退回 Secrets 的 PORTAL_PASSWORD。
+PW_SALT = "bond-islands-pw:"
+
+
+def _pw_hash(pw: str) -> str:
+    return hashlib.sha256((PW_SALT + pw).encode()).hexdigest()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _pw_hash_from_db() -> str:
+    svc = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
+    if not svc:
+        return ""
+    try:
+        r = requests.get(f"{SB_URL.rstrip('/')}/rest/v1/island_settings",
+                         params={"select": "value", "key": "eq.portal_pw_sha256"},
+                         headers={"apikey": svc, "Authorization": f"Bearer {svc}"}, timeout=8)
+        rows = r.json() if r.ok else []
+        return str(rows[0]["value"]).strip() if rows else ""
+    except Exception:
+        return ""
+
+
+PW_HASH = _pw_hash_from_db() or _pw_hash(PASSWORD)
+
+
+def pw_ok(pw: str) -> bool:
+    return _pw_hash((pw or "").strip()) == PW_HASH
+
+
+# 遊戲／放大看連結帶的通行碼（由目前密碼推算，換密碼就會一起失效）
+TOKEN = hashlib.sha256(f"bond-islands:{PW_HASH}".encode()).hexdigest()[:20]
 
 FULL = """
 <style>
@@ -246,7 +278,7 @@ if not st.session_state.get("authed"):
             pwd = st.text_input("授權碼", type="password", placeholder="輸入授權碼", label_visibility="collapsed")
             ok = st.form_submit_button("上島", use_container_width=True, type="primary")
         if ok:
-            if pwd == PASSWORD:
+            if pw_ok(pwd):
                 st.session_state.authed = True
                 st.rerun()
             else:
