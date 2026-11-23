@@ -6,7 +6,7 @@
 - 通過後載入 island.html，並把 Supabase 設定注入網頁
 - ?game=coupon / stopwatch / forest 會開啟遊樂園島上的三款遊戲
 - 私人 repo 的 posters 資料夾放成交故事島的戰報海報（檔名＝案例代號）
-- ?admin=1 是固收科上傳頁（要 ADMIN_PASSWORD 和可寫入的 GH_WRITE_TOKEN）：
+- ?admin=1 是固收科上傳頁（密碼雜湊存在 island_settings 的 admin_pw_sha256，讀不到才用 Secrets 的 ADMIN_PASSWORD；另要可寫入的 GH_WRITE_TOKEN）：
   上傳「債市每日聚焦」（只留近 60 天）和「發行機構簡介」，存到私人 repo 的 focus／issuers 資料夾
 - ?view=focus&d=日期、?view=issuer&id=代號 是放大看的頁面
 """
@@ -221,13 +221,13 @@ def _pw_hash(pw: str) -> str:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _pw_hash_from_db() -> str:
+def _pw_hash_from_db(key: str = "portal_pw_sha256") -> str:
     svc = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     if not svc:
         return ""
     try:
         r = requests.get(f"{SB_URL.rstrip('/')}/rest/v1/island_settings",
-                         params={"select": "value", "key": "eq.portal_pw_sha256"},
+                         params={"select": "value", "key": f"eq.{key}"},
                          headers={"apikey": svc, "Authorization": f"Bearer {svc}"}, timeout=8)
         rows = r.json() if r.ok else []
         return str(rows[0]["value"]).strip() if rows else ""
@@ -380,19 +380,23 @@ if view in ("focus", "issuer"):
 # ---------- 固收科上傳頁（?admin=1） ----------
 if qp.get("admin") == "1":
     ADMIN_PW = str(st.secrets.get("ADMIN_PASSWORD", "")).strip()
+    # 上傳頁密碼也優先用 Supabase 的雜湊（key＝admin_pw_sha256），讀不到才用 Secrets 的 ADMIN_PASSWORD
+    ADMIN_SALT = "bond-islands-admin:"
+    ADMIN_HASH = _pw_hash_from_db("admin_pw_sha256") or (
+        hashlib.sha256((ADMIN_SALT + ADMIN_PW).encode()).hexdigest() if ADMIN_PW else "")
     WRITE_TOKEN = str(st.secrets.get("GH_WRITE_TOKEN", "")).strip()
     st.markdown("<style>header,footer,#MainMenu{display:none!important}.block-container{max-width:900px;padding-top:1rem}</style>",
                 unsafe_allow_html=True)
     st.title("🏝️ 群島上傳頁")
-    if not ADMIN_PW or not WRITE_TOKEN:
-        st.error("Secrets 還少了 " + "、".join([n for n, v in (("ADMIN_PASSWORD", ADMIN_PW), ("GH_WRITE_TOKEN", WRITE_TOKEN)) if not v])
+    if not ADMIN_HASH or not WRITE_TOKEN:
+        st.error("Secrets 還少了 " + "、".join([n for n, v in (("ADMIN_PASSWORD", ADMIN_HASH), ("GH_WRITE_TOKEN", WRITE_TOKEN)) if not v])
                  + "。ADMIN_PASSWORD 是這個上傳頁的密碼；GH_WRITE_TOKEN 是可以寫入 bond-islands 的 GitHub 通行碼。")
         st.stop()
     if not st.session_state.get("admin_ok"):
         with st.form("adm", border=False):
             apw = st.text_input("上傳頁密碼", type="password")
             if st.form_submit_button("進入", type="primary"):
-                if apw == ADMIN_PW:
+                if hashlib.sha256((ADMIN_SALT + (apw or "").strip()).encode()).hexdigest() == ADMIN_HASH:
                     st.session_state.admin_ok = True
                     st.rerun()
                 st.error("密碼不對。")
