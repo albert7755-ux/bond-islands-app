@@ -903,7 +903,7 @@ if qp.get("admin") == "1":
             except Exception as e:
                 st.error(f"讀不到留言（{e}）。")
     with tab7:
-        st.caption("處長巡島挑戰的成績。答對 10 分、答錯 3 分，一天找齊 5 位處長再加 10 分；每週一起算。"
+        st.caption("處長巡島挑戰的成績。答對 10 分、答錯 3 分，一天找齊 5 位處長再加 10 分；每月 1 日起算、累計到月底。"
                    "目前" + ("已對所有人開放（要暫停的話，在 Secrets 設 QUIZ_ON = \"0\"）。" if str(st.secrets.get("QUIZ_ON", "1")).strip() != "0"
                             else "暫停中：只有網址加 ?quiz=1 的人看得到。")
                    + "分行填「固收」的固收科同仁不列入排名（島上和這裡都一樣）。")
@@ -911,10 +911,14 @@ if qp.get("admin") == "1":
             need_service()
         else:
             today = dt.datetime.now(TZ).date()
-            monday = today - dt.timedelta(days=today.weekday())
-            wk = st.date_input("看哪一週（選那週任一天）", value=today)
-            start = wk - dt.timedelta(days=wk.weekday())
-            end = start + dt.timedelta(days=7)
+            mode = st.radio("統計區間", ["整個月（累計到月底）", "單週"], horizontal=True)
+            wk = st.date_input("看哪個月／哪一週（選期間內任一天）", value=today)
+            if mode.startswith("整個月"):
+                start = wk.replace(day=1)
+                end = (start + dt.timedelta(days=32)).replace(day=1)
+            else:
+                start = wk - dt.timedelta(days=wk.weekday())
+                end = start + dt.timedelta(days=7)
             try:
                 rows = sb_get(f"island_quiz?select=name,br,day,boss,ok,pts&day=gte.{start}&day=lt.{end}&limit=20000")
                 agg = {}
@@ -945,9 +949,9 @@ if qp.get("admin") == "1":
                     for t in table:
                         w.writerow({c: t[c] for c in cols})
                     st.download_button("下載 Excel 可開的 CSV", ("\ufeff" + buf.getvalue()).encode("utf-8"),
-                                       file_name=f"處長挑戰_{start}.csv", mime="text/csv")
+                                       file_name=f"處長挑戰_{start}_{end - dt.timedelta(days=1)}.csv", mime="text/csv")
                 else:
-                    st.info("這週還沒有人答題。")
+                    st.info("這段期間還沒有人答題。")
             except Exception as e:
                 st.error(f"讀不到成績（{e}）。如果是第一次用，請先在 Supabase 執行處長挑戰的設定 SQL。")
     st.stop()
