@@ -989,7 +989,8 @@ if not html.lstrip().lower().startswith("<!doctype"):
             '<style>body{margin:0;font:14px system-ui,sans-serif}</style></head><body>' + html + '</body></html>')
 # 處長巡島挑戰（處長隨堂考）：2026/11/9 起對所有人開放。要暫停的話，在 Secrets 設 QUIZ_ON = "0"
 QUIZ_ON = str(st.secrets.get("QUIZ_ON", "1")).strip() != "0" or qp.get("quiz") == "1"
-cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN, "quiz": QUIZ_ON}
+cfg = {"url": SB_URL, "key": SB_KEY, "app": APP_URL, "k": TOKEN, "quiz": QUIZ_ON,
+       "event": qp.get("event") == "1"}  # 聚餐活動：網址加 ?event=1 才會出現找 Winnie & Jerry
 posters = load_posters()
 days = recent_focus()
 focus = {"days": [{"d": x["d"], "title": x.get("title", "")} for x in days], "latest": None}
