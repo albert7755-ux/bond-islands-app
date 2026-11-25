@@ -512,25 +512,38 @@ if qp.get("admin") == "1":
                 if b3.button("↺ 回到等待", use_container_width=True):
                     ev_patch({"started_at": None, "ended": False, "rounds": int(new_rounds), "round_min": int(new_rmin)})
                     st.rerun()
-                if started and not stt.get("ended"):
-                    t0 = dt.datetime.fromisoformat(started.replace("Z", "+00:00"))
-                    base = (int(t0.timestamp() // 60) % 1000000) * 100
-                    st.markdown("**各回合全破名單**（每回合前 5 名可領獎）")
-                    for k in range(1, min(n, rounds) + 1):
-                        try:
-                            rows = sb_get(f"island_event?select=name,br,who,found_at&round=eq.{base + k}&order=found_at.asc&limit=2000")
-                        except Exception:
-                            rows = []
-                        m = {}
-                        for x in rows:
-                            a = m.setdefault((x["name"], x["br"]), {})
-                            a[x["who"]] = x["found_at"]
-                        done = sorted([(max(v["winnie"], v["jerry"]), nm, br) for (nm, br), v in m.items() if "winnie" in v and "jerry" in v])
-                        with st.expander(f"第 {k} 回合：{len(done)} 人全破", expanded=(k == min(n, rounds))):
-                            if not done:
-                                st.caption("還沒有人全破")
-                            for i, (t, nm, br) in enumerate(done[:20], 1):
-                                st.write(f"{'🏅 ' if i <= 5 else ''}{i}. {nm}{'・' + br if br else ''}")
+                # 今天所有回合的名單（不管按了結束或回到等待都看得到）
+                st.markdown("**今天各回合名單**（全破依完成先後排序，前 5 名可領獎 🏅）")
+                today = dt.datetime.now(TZ).date().isoformat()
+                try:
+                    rows = sb_get(f"island_event?select=round,name,br,who,found_at&day=eq.{today}&order=found_at.asc&limit=5000")
+                except Exception as e:
+                    rows = []
+                    st.error(f"讀不到名單：{e}")
+                if st.button("🔄 重新整理名單"):
+                    st.rerun()
+                if not rows:
+                    st.caption("今天還沒有人找到長官。")
+                by_round = {}
+                for x in rows:
+                    by_round.setdefault(x["round"], []).append(x)
+                for i, rk in enumerate(sorted(by_round, key=lambda r: max(x["found_at"] for x in by_round[r]), reverse=True)):
+                    xs = by_round[rk]
+                    m = {}
+                    for x in xs:
+                        m.setdefault((x["name"], x["br"]), {})[x["who"]] = x["found_at"]
+                    done = sorted([(max(v["winnie"], v["jerry"]), nm, br) for (nm, br), v in m.items() if "winnie" in v and "jerry" in v])
+                    half = [(nm, br, "Winnie" if "winnie" in v else "Jerry") for (nm, br), v in m.items() if len(v) == 1]
+                    t_first = dt.datetime.fromisoformat(min(x["found_at"] for x in xs).replace("Z", "+00:00")).astimezone(TZ).strftime("%H:%M")
+                    lbl = f"第 {rk % 100} 回合" if rk >= 10000000 else "試玩回合"
+                    with st.expander(f"{lbl}（{t_first} 起）：{len(done)} 人全破、{len(half)} 人只找到一位", expanded=(i == 0)):
+                        if not done:
+                            st.caption("還沒有人全破")
+                        for j, (t, nm, br) in enumerate(done[:30], 1):
+                            tt = dt.datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(TZ).strftime("%H:%M:%S")
+                            st.write(f"{'🏅 ' if j <= 5 else ''}{j}. {nm}{'・' + br if br else ''}　{tt}")
+                        if half:
+                            st.caption("只找到一位：" + "、".join(f"{nm}{'・' + br if br else ''}（{w}）" for nm, br, w in half))
     with tab1:
         st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。"
                    "已經傳過的日期，想只改發行機構或標題：選同一天、改好後按上傳，不用重傳檔案（沒選新檔案就保留原本的）。")
