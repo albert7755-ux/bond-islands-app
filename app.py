@@ -452,7 +452,7 @@ if qp.get("admin") == "1":
     def save_json(path, obj, msg):
         gh_put(path, json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8"), msg)
 
-    tab1, tab10, tab6, tab8, tab2, tab9, tab3, tab4, tab5, tab7 = st.tabs(["📰 債市每日聚焦", "🧭 固收觀點", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "📑 財報解讀", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
+    tab11, tab1, tab10, tab6, tab8, tab2, tab9, tab3, tab4, tab5, tab7 = st.tabs(["🎯 聚餐活動", "📰 債市每日聚焦", "🧭 固收觀點", "🏆 成交分享", "💬 留言板", "🏢 發行機構簡介", "📑 財報解讀", "🔥 熱銷前十大", "📣 全島廣播", "📊 統計", "🏅 處長挑戰"])
     SB_SERVICE = str(st.secrets.get("SUPABASE_SERVICE_KEY", "")).strip()
     SBH = {"apikey": SB_SERVICE, "Authorization": f"Bearer {SB_SERVICE}", "Content-Type": "application/json"}
 
@@ -465,6 +465,72 @@ if qp.get("admin") == "1":
         if r.status_code != 200:
             raise RuntimeError(f"{r.status_code} {r.text[:160]}")
         return r.json()
+    with tab11:
+        st.caption("尋找 Winnie 執副 & Jerry 副總。理專用活動網址（群島網址後面加 ?event=1）上島；"
+                   "按「開始」前兩位長官不會出現，按下後每回合自動換藏身處，最後一回合結束就自動收工。")
+        if not SB_SERVICE:
+            need_service()
+        else:
+            def ev_patch(body):
+                r = requests.patch(f"{SB_URL}/rest/v1/island_event_state?id=eq.1", headers=SBH, json=body, timeout=20)
+                if r.status_code not in (200, 204):
+                    raise RuntimeError(f"{r.status_code} {r.text[:160]}")
+            try:
+                stt = (sb_get("island_event_state?id=eq.1&select=*") or [{}])[0]
+            except Exception as e:
+                stt = None
+                st.error(f"讀不到活動開關（island_event_state）：{e}")
+            if stt is not None:
+                now = dt.datetime.now(dt.timezone.utc)
+                rounds, rmin = int(stt.get("rounds") or 4), int(stt.get("round_min") or 5)
+                started = stt.get("started_at")
+                n = 0
+                if stt.get("ended"):
+                    st.info("🏁 目前狀態：活動已結束")
+                elif not started:
+                    st.info("⏳ 目前狀態：等待開始（大家可以先上島）")
+                else:
+                    t0 = dt.datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    el = (now - t0).total_seconds()
+                    n = int(el // (rmin * 60)) + 1
+                    if n > rounds:
+                        st.info(f"🏁 目前狀態：{rounds} 回合都玩完了")
+                    else:
+                        left = int(rmin * 60 - (el - (n - 1) * rmin * 60))
+                        st.success(f"🎯 進行中：第 {n}／{rounds} 回合，剩 {left // 60}:{left % 60:02d}（重新整理頁面更新）")
+                c1, c2 = st.columns(2)
+                new_rounds = c1.number_input("回合數", 1, 10, rounds)
+                new_rmin = c2.number_input("每回合幾分鐘", 2, 15, rmin)
+                b1, b2, b3 = st.columns(3)
+                if b1.button("▶️ 開始", type="primary", use_container_width=True):
+                    ev_patch({"started_at": now.isoformat(), "rounds": int(new_rounds), "round_min": int(new_rmin), "ended": False})
+                    st.success("開始了！大家的手機約 5 秒內會看到第 1 回合。")
+                    st.rerun()
+                if b2.button("⏹ 結束", use_container_width=True):
+                    ev_patch({"ended": True})
+                    st.rerun()
+                if b3.button("↺ 回到等待", use_container_width=True):
+                    ev_patch({"started_at": None, "ended": False, "rounds": int(new_rounds), "round_min": int(new_rmin)})
+                    st.rerun()
+                if started and not stt.get("ended"):
+                    t0 = dt.datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    base = (int(t0.timestamp() // 60) % 1000000) * 100
+                    st.markdown("**各回合全破名單**（每回合前 5 名可領獎）")
+                    for k in range(1, min(n, rounds) + 1):
+                        try:
+                            rows = sb_get(f"island_event?select=name,br,who,found_at&round=eq.{base + k}&order=found_at.asc&limit=2000")
+                        except Exception:
+                            rows = []
+                        m = {}
+                        for x in rows:
+                            a = m.setdefault((x["name"], x["br"]), {})
+                            a[x["who"]] = x["found_at"]
+                        done = sorted([(max(v["winnie"], v["jerry"]), nm, br) for (nm, br), v in m.items() if "winnie" in v and "jerry" in v])
+                        with st.expander(f"第 {k} 回合：{len(done)} 人全破", expanded=(k == min(n, rounds))):
+                            if not done:
+                                st.caption("還沒有人全破")
+                            for i, (t, nm, br) in enumerate(done[:20], 1):
+                                st.write(f"{'🏅 ' if i <= 5 else ''}{i}. {nm}{'・' + br if br else ''}")
     with tab1:
         st.caption(f"可以傳 PDF 或圖片（可多張），也可以只打文字。島上只留近 {KEEP_DAYS} 天，超過的會自動刪掉。"
                    "已經傳過的日期，想只改發行機構或標題：選同一天、改好後按上傳，不用重傳檔案（沒選新檔案就保留原本的）。")
